@@ -2,6 +2,7 @@ package mdgen
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -282,12 +283,16 @@ func (g *BaseGenerator) handleEnum(out string, p *Element) string {
 	values := make([]string, 0)
 
 	if p.El.Enum != nil {
-		out += "**enum**: the value of this property must be equal to one of the following values:\n\n"
+		pType := p.El.Type[0]
+		out += fmt.Sprintf("**enum**: the value of this property must be equal to one of the following %s values:\n\n", pType)
 
 		for _, v := range p.El.Enum {
-			s := v.(string)
+			// enum can contain any type: strings, integers, floats, even null.
+			s := fmt.Sprintf("%v", v)
 
-			s = "`\"" + s + "\"`"
+			if pType == "string" {
+				s = "`\"" + s + "\"`"
+			}
 
 			if len(s) > maxValueLen {
 				maxValueLen = len(s)
