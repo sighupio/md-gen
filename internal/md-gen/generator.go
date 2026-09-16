@@ -3,7 +3,6 @@ package mdgen
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -47,6 +46,29 @@ type Element struct {
 	MinItemsFromParent    int
 	El                    *gj.Type
 	Source                string
+}
+
+// resolveFileRef parses the schema that an external file ref points to and keeps
+// it in Sources, keyed by the ref. Relative refs resolve against the root dir.
+func (g *BaseGenerator) resolveFileRef(ref string) (*gj.Type, error) {
+	if src, ok := g.Sources[ref]; ok {
+		return (*gj.Type)(src.ObjectAsType), nil
+	}
+
+	refPath := ref
+
+	if !filepath.IsAbs(ref) {
+		refPath = filepath.Join(g.RootDir, ref)
+	}
+
+	refSource, err := jsonschemaparser.NewBaseParser(refPath).Parse()
+	if err != nil {
+		return nil, err
+	}
+
+	g.Sources[ref] = refSource
+
+	return (*gj.Type)(refSource.ObjectAsType), nil
 }
 
 func (g *BaseGenerator) Generate() ([]byte, error) {
@@ -131,52 +153,14 @@ func (g *BaseGenerator) Generate() ([]byte, error) {
 
 			// handle from external refs
 			if strings.HasPrefix(p.El.Ref, ".") {
-				refPath := p.El.Ref
-
-				if !filepath.IsAbs(p.El.Ref) {
-					oldWd, err := os.Getwd()
-					if err != nil {
-						return nil, err
-					}
-
-					err = os.Chdir(g.RootDir)
-					if err != nil {
-						return nil, err
-					}
-
-					refPath, err = filepath.Abs(p.El.Ref)
-					if err != nil {
-						return nil, err
-					}
-
-					err = os.Chdir(oldWd)
-					if err != nil {
-						return nil, err
-					}
-				}
-
-				parser := jsonschemaparser.NewBaseParser(refPath)
-
-				refSource, err := parser.Parse()
+				pRef, err = g.resolveFileRef(p.El.Ref)
 				if err != nil {
 					return nil, err
 				}
 
-				pRef = (*gj.Type)(refSource.ObjectAsType)
-
-				g.Sources[p.El.Ref] = refSource
-
 				pSource = p.El.Ref
 
-				elo := &Element{
-					Key:       p.Key,
-					ParentKey: p.ParentKey,
-					El:        pRef,
-					FromRef:   true,
-					Source:    pSource,
-				}
-
-				logrus.Debugf("adding element from file ref %+v", elo)
+				logrus.Debugf("adding element from file ref '%s'", p.El.Ref)
 			}
 
 			if pRef != nil {
@@ -383,6 +367,17 @@ func (g *BaseGenerator) handleObject(out string, p *Element) (string, []*Element
 					if len(pRef.Type) > 0 {
 						t = pRef.Type[0]
 					}
+				}
+			}
+
+			// an external ref keeps its type in another file, so read it from there
+			if strings.HasPrefix(el.El.Ref, ".") {
+				pRef, err := g.resolveFileRef(el.El.Ref)
+				if err != nil {
+					// the main loop resolves this same ref and reports the error there
+					logrus.Debugf("could not resolve file ref '%s': %s", el.El.Ref, err)
+				} else if len(pRef.Type) > 0 {
+					t = pRef.Type[0]
 				}
 			}
 
