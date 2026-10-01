@@ -1,6 +1,7 @@
 package mdgen
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -189,13 +190,9 @@ func (g *BaseGenerator) Generate() ([]byte, error) {
 					Source:    pSource,
 				}
 
-				if p.FromItems && pRef.Description == "" && p.DescriptionFromParent != "" {
-					el.DescriptionFromParent = p.DescriptionFromParent
-				}
-
-				if pRef.Description == "" && p.El.Description != "" && !p.FromItems {
-					el.DescriptionFromParent = p.El.Description
-				}
+				// the description closest to the field wins over the one of the referenced type, as
+				// in yaml-language-server
+				el.DescriptionFromParent = cmp.Or(p.El.Description, p.DescriptionFromParent)
 
 				if p.FromItems && pRef.MaxItems == 0 && p.MaxItemsFromParent != 0 {
 					el.MaxItemsFromParent = p.MaxItemsFromParent
@@ -211,12 +208,14 @@ func (g *BaseGenerator) Generate() ([]byte, error) {
 			}
 		}
 
-		if p.El.Description != "" {
+		description := cmp.Or(p.El.Description, p.DescriptionFromParent)
+		if p.FromRef {
+			description = cmp.Or(p.DescriptionFromParent, p.El.Description)
+		}
+
+		if description != "" {
 			genOut += "### Description\n\n"
-			genOut += p.El.Description + "\n\n"
-		} else if p.DescriptionFromParent != "" {
-			genOut += "### Description\n\n"
-			genOut += p.DescriptionFromParent + "\n\n"
+			genOut += description + "\n\n"
 		}
 
 		if p.El.Enum != nil || p.El.Pattern != "" || p.El.MinItems != 0 || p.El.MaxItems != 0 || p.El.MinLength != 0 || p.El.MaxLength != 0 ||
