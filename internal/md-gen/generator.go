@@ -49,26 +49,45 @@ type Element struct {
 }
 
 // resolveFileRef parses the schema that an external file ref points to and keeps
-// it in Sources, keyed by the ref. Relative refs resolve against the root dir.
-func (g *BaseGenerator) resolveFileRef(ref string) (*gj.Type, error) {
-	if src, ok := g.Sources[ref]; ok {
-		return (*gj.Type)(src.ObjectAsType), nil
+// it in Sources, keyed by the file path. Relative refs resolve against the root dir.
+// A "#/$defs/<name>" fragment selects that definition of the file. It also returns
+// the Sources key, so that the refs inside the file resolve against it.
+func (g *BaseGenerator) resolveFileRef(ref string) (*gj.Type, string, error) {
+	file, fragment, _ := strings.Cut(ref, "#")
+
+	src, ok := g.Sources[file]
+	if !ok {
+		refPath := file
+
+		if !filepath.IsAbs(file) {
+			refPath = filepath.Join(g.RootDir, file)
+		}
+
+		var err error
+
+		src, err = jsonschemaparser.NewBaseParser(refPath).Parse()
+		if err != nil {
+			return nil, "", err
+		}
+
+		g.Sources[file] = src
 	}
 
-	refPath := ref
-
-	if !filepath.IsAbs(ref) {
-		refPath = filepath.Join(g.RootDir, ref)
+	if fragment == "" {
+		return (*gj.Type)(src.ObjectAsType), file, nil
 	}
 
-	refSource, err := jsonschemaparser.NewBaseParser(refPath).Parse()
-	if err != nil {
-		return nil, err
+	name, ok := strings.CutPrefix(fragment, "/$defs/")
+	if !ok {
+		return nil, "", fmt.Errorf("unsupported fragment in ref '%s': only '#/$defs/<name>' is supported", ref)
 	}
 
-	g.Sources[ref] = refSource
+	def := src.Definitions[name]
+	if def == nil {
+		return nil, "", fmt.Errorf("ref '%s' not found in definitions", ref)
+	}
 
-	return (*gj.Type)(refSource.ObjectAsType), nil
+	return def, file, nil
 }
 
 func (g *BaseGenerator) Generate() ([]byte, error) {
@@ -153,12 +172,10 @@ func (g *BaseGenerator) Generate() ([]byte, error) {
 
 			// handle from external refs
 			if strings.HasPrefix(p.El.Ref, ".") {
-				pRef, err = g.resolveFileRef(p.El.Ref)
+				pRef, pSource, err = g.resolveFileRef(p.El.Ref)
 				if err != nil {
 					return nil, err
 				}
-
-				pSource = p.El.Ref
 
 				logrus.Debugf("adding element from file ref '%s'", p.El.Ref)
 			}
@@ -372,7 +389,7 @@ func (g *BaseGenerator) handleObject(out string, p *Element) (string, []*Element
 
 			// an external ref keeps its type in another file, so read it from there
 			if strings.HasPrefix(el.El.Ref, ".") {
-				pRef, err := g.resolveFileRef(el.El.Ref)
+				pRef, _, err := g.resolveFileRef(el.El.Ref)
 				if err != nil {
 					// the main loop resolves this same ref and reports the error there
 					logrus.Debugf("could not resolve file ref '%s': %s", el.El.Ref, err)
